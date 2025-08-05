@@ -697,13 +697,30 @@ class EconomyBot(commands.Bot):
         return True, new_from_balance, fee
 
 if __name__ == "__main__":
-    bot = EconomyBot()
+    # Загрузка переменных окружения из .env файла
+    from dotenv import load_dotenv
+    load_dotenv()
     
-    # Получение токена
+    # Отладочный вывод
     token = os.getenv('DISCORD_TOKEN')
+    print(f"Токен загружен: {'Да' if token else 'Нет'}")
+    print(f"Длина токена: {len(token) if token else 0} символов" )
+    print(f"Начинается с: {token[:10]}..." if token else "Токен пуст")
+    print(f"Текущая директория: {os.getcwd()}")
+    print(f"Файл .env существует: {os.path.exists('.env')}")
+    
+    # Читаем .env напрямую для отладки
+    try:
+        with open('.env', 'r') as f:
+            print("Содержимое .env:", f.read())
+    except Exception as e:
+        print(f"Ошибка чтения .env: {e}")
+    
     if not token:
-        print("Ошибка: Установите переменную окружения DISCORD_TOKEN")
-        print("Или создайте файл .env с токеном бота")
+        print("Ошибка: Не удалось загрузить токен из переменных окружения")
+        print("Проверьте, что файл .env существует и содержит DISCORD_TOKEN")
         exit(1)
+        
+    bot = EconomyBot()
     
     bot.run(token)

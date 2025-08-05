@@ -1,4 +1,5 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import sqlite3
 from datetime import datetime, timedelta
@@ -8,10 +9,10 @@ class Economy(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
     
-    @commands.slash_command(name="казна", description="Показать текущий баланс казны")
-    async def treasury(self, ctx):
+    @app_commands.command(name="казна", description="Показать текущий баланс казны")
+    async def treasury(self, interaction: discord.Interaction):
         """Команда для показа текущей казны"""
-        treasury = await self.bot.get_treasury(ctx.guild)
+        treasury = await self.bot.get_treasury(interaction.guild)
         
         embed = discord.Embed(
             title="💰 Государственная казна",
@@ -20,10 +21,10 @@ class Economy(commands.Cog):
         )
         
         # Добавление информации о доходе
-        income_per_minute = ctx.guild.member_count * self.bot.config["income_per_member"]
+        income_per_minute = interaction.guild.member_count * self.bot.config["income_per_member"]
         embed.add_field(
             name="📈 Доход",
-            value=f"{income_per_minute} монет/мин\n({ctx.guild.member_count} участников × {self.bot.config['income_per_member']})",
+            value=f"{income_per_minute} монет/мин\n({interaction.guild.member_count} участников × {self.bot.config['income_per_member']})",
             inline=True
         )
         
@@ -55,10 +56,10 @@ class Economy(commands.Cog):
                 inline=False
             )
         
-        await ctx.respond(embed=embed)
+        await interaction.response.send_message(embed=embed)
     
-    @commands.slash_command(name="экономика", description="Показать статус экономики")
-    async def economy_status(self, ctx):
+    @app_commands.command(name="экономика", description="Показать статус экономики")
+    async def economy_status(self, interaction: discord.Interaction):
         """Команда для показа статуса экономики"""
         # Получение данных за последние 10 минут
         conn = sqlite3.connect(self.bot.db_path)
@@ -71,7 +72,7 @@ class Economy(commands.Cog):
                FROM economy 
                WHERE guild_id = ? AND timestamp >= ? 
                ORDER BY timestamp""",
-            (ctx.guild.id, ten_minutes_ago)
+            (interaction.guild.id, ten_minutes_ago)
         )
         
         recent_data = cursor.fetchall()
@@ -135,7 +136,7 @@ class Economy(commands.Cog):
         )
         
         # Прогноз
-        income_per_hour = ctx.guild.member_count * self.bot.config["income_per_member"] * 60
+        income_per_hour = interaction.guild.member_count * self.bot.config["income_per_member"] * 60
         embed.add_field(
             name="📈 Прогноз на час",
             value=f"+{income_per_hour:,} монет",
@@ -145,27 +146,28 @@ class Economy(commands.Cog):
         # Генерация изображения статуса
         from utils.visualization import create_status_image
         
-        status_image_path = create_status_image(status, current_treasury, growth, ctx.guild.name)
+        status_image_path = create_status_image(status, current_treasury, growth, interaction.guild.name)
         
         file = None
         if status_image_path:
             file = discord.File(status_image_path, filename="status.png")
             embed.set_image(url="attachment://status.png")
         
-        await ctx.respond(embed=embed, file=file)
+        await interaction.response.send_message(embed=embed, file=file)
         
         if status_image_path:
             import os
             os.remove(status_image_path)
     
-    @commands.slash_command(name="график", description="Сгенерировать график экономики")
-    async def force_chart(self, ctx):
+    @app_commands.command(name="график", description="Принудительно сгенерировать график экономики")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def force_chart(self, interaction: discord.Interaction):
         """Принудительная генерация графика"""
-        await ctx.defer()
+        await interaction.response.defer(ephemeral=True)
         
         try:
             from utils.visualization import create_economy_chart
-            chart_path = await create_economy_chart(self.bot, ctx.guild.id)
+            chart_path = await create_economy_chart(self.bot, interaction.guild.id)
             
             if chart_path:
                 embed = discord.Embed(
@@ -177,16 +179,16 @@ class Economy(commands.Cog):
                 file = discord.File(chart_path, filename="economy_chart.png")
                 embed.set_image(url="attachment://economy_chart.png")
                 
-                await ctx.followup.send(embed=embed, file=file)
+                await interaction.followup.send(embed=embed, file=file, ephemeral=True)
                 
                 # Удаление временного файла
                 import os
                 os.remove(chart_path)
             else:
-                await ctx.followup.send("❌ Не удалось создать график. Недостаточно данных.")
+                await interaction.followup.send("❌ Не удалось создать график. Недостаточно данных.", ephemeral=True)
                 
         except Exception as e:
-            await ctx.followup.send(f"❌ Ошибка при создании графика: {str(e)}")
+            await interaction.followup.send(f"❌ Ошибка при создании графика: {str(e)}", ephemeral=True)
     
     @commands.Cog.listener()
     async def on_guild_channel_create(self, channel):
@@ -498,14 +500,14 @@ class Economy(commands.Cog):
                 await log_channel.send(embed=embed)
 
     @commands.slash_command(name="модификаторы", description="Показать активные экономические модификаторы")
-    async def modifiers(self, ctx):
+    async def modifiers(self, interaction: discord.Interaction):
         """Команда для показа активных модификаторов"""
         conn = sqlite3.connect(self.bot.db_path)
         cursor = conn.cursor()
         
         cursor.execute(
             "SELECT description, value, modifier_type, expires_at FROM modifiers WHERE guild_id = ? AND expires_at > CURRENT_TIMESTAMP",
-            (ctx.guild.id,)
+            (interaction.guild.id,)
         )
         
         active_modifiers = cursor.fetchall()
@@ -536,7 +538,7 @@ class Economy(commands.Cog):
                     inline=False
                 )
         
-        await ctx.respond(embed=embed)
+        await interaction.response.send_message(embed=embed)
 
 def setup(bot):
     bot.add_cog(Economy(bot))
