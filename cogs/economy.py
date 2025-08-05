@@ -29,20 +29,18 @@ class Economy(commands.Cog):
         )
         
         # Последние транзакции
-        conn = sqlite3.connect(self.bot.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute(
-            """SELECT amount, description, timestamp 
-               FROM transactions 
-               WHERE guild_id = ? 
-               ORDER BY timestamp DESC 
-               LIMIT 5""",
-            (ctx.guild.id,)
-        )
-        
-        transactions = cursor.fetchall()
-        conn.close()
+        async with sqlite3.connect(self.bot.db_path) as conn:
+            cursor = await conn.execute(
+                """SELECT amount, description, timestamp 
+                   FROM transactions 
+                   WHERE guild_id = ? 
+                   ORDER BY timestamp DESC 
+                   LIMIT 5""",
+                (interaction.guild.id,)
+            )
+            
+            transactions = await cursor.fetchall()
+            await cursor.close()
         
         if transactions:
             transaction_text = ""
@@ -62,21 +60,17 @@ class Economy(commands.Cog):
     async def economy_status(self, interaction: discord.Interaction):
         """Команда для показа статуса экономики"""
         # Получение данных за последние 10 минут
-        conn = sqlite3.connect(self.bot.db_path)
-        cursor = conn.cursor()
-        
-        ten_minutes_ago = datetime.now() - timedelta(minutes=10)
-        
-        cursor.execute(
-            """SELECT treasury, timestamp 
-               FROM economy 
-               WHERE guild_id = ? AND timestamp >= ? 
-               ORDER BY timestamp""",
-            (interaction.guild.id, ten_minutes_ago)
-        )
-        
-        recent_data = cursor.fetchall()
-        conn.close()
+        async with sqlite3.connect(self.bot.db_path) as conn:
+            cursor = await conn.execute(
+                """SELECT treasury, timestamp 
+                   FROM economy 
+                   WHERE guild_id = ? AND timestamp >= ? 
+                   ORDER BY timestamp""",
+                (interaction.guild.id, ten_minutes_ago)
+            )
+            
+            recent_data = await cursor.fetchall()
+            await cursor.close()
         
         if len(recent_data) < 2:
             growth = 0
@@ -84,7 +78,7 @@ class Economy(commands.Cog):
             growth = recent_data[-1][0] - recent_data[0][0]
         
         # Определение статуса экономики
-        current_treasury = await self.bot.get_treasury(ctx.guild)
+        current_treasury = await self.bot.get_treasury(interaction.guild)
         
         if current_treasury < 0:
             status = "💥 Крах"
@@ -499,7 +493,7 @@ class Economy(commands.Cog):
                 embed.add_field(name="Текущий баланс", value=f"{new_balance} монет")
                 await log_channel.send(embed=embed)
 
-    @commands.slash_command(name="модификаторы", description="Показать активные экономические модификаторы")
+    @app_commands.command(name="модификаторы", description="Показать активные экономические модификаторы")
     async def modifiers(self, interaction: discord.Interaction):
         """Команда для показа активных модификаторов"""
         conn = sqlite3.connect(self.bot.db_path)
@@ -540,5 +534,5 @@ class Economy(commands.Cog):
         
         await interaction.response.send_message(embed=embed)
 
-def setup(bot):
-    bot.add_cog(Economy(bot))
+async def setup(bot):
+    await bot.add_cog(Economy(bot))

@@ -24,5 +24,5 @@ class Visualization(commands.Cog):
             'accent': '#8b0000'
         }
 
-def setup(bot):
-    bot.add_cog(Visualization(bot))
+async def setup(bot):
+    await bot.add_cog(Visualization(bot))

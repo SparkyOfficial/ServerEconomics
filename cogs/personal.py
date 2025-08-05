@@ -1,4 +1,5 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import sqlite3
 from datetime import datetime, timedelta
@@ -9,34 +10,34 @@ class Personal(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
     
-    @commands.slash_command(name="баланс", description="Показать свой баланс или баланс другого пользователя")
-    async def balance(self, ctx, пользователь: discord.Member = None):
+    @app_commands.command(name="баланс", description="Показать свой баланс или баланс другого пользователя")
+    @app_commands.describe(пользователь="Пользователь, чей баланс нужно показать")
+    async def balance(self, interaction: discord.Interaction, пользователь: discord.Member = None):
         """Команда для показа баланса"""
-        target_user = пользователь or ctx.author
+        target_user = пользователь or interaction.user
         
-        balance = await self.bot.get_user_balance(ctx.guild, target_user)
+        balance = await self.bot.get_user_balance(interaction.guild, target_user)
         
         # Получить статистику
-        conn = sqlite3.connect(self.bot.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute(
-            "SELECT total_earned FROM wallets WHERE guild_id = ? AND user_id = ?",
-            (ctx.guild.id, target_user.id)
-        )
-        result = cursor.fetchone()
-        total_earned = result[0] if result else 0
-        
-        # Получить последние транзакции
-        cursor.execute(
-            """SELECT amount, transaction_type, description, timestamp 
-               FROM transactions 
-               WHERE guild_id = ? AND (from_user_id = ? OR to_user_id = ?) 
-               ORDER BY timestamp DESC LIMIT 5""",
-            (ctx.guild.id, target_user.id, target_user.id)
-        )
-        recent_transactions = cursor.fetchall()
-        conn.close()
+        async with sqlite3.connect(self.bot.db_path) as conn:
+            cursor = await conn.execute(
+                "SELECT total_earned FROM wallets WHERE guild_id = ? AND user_id = ?",
+                (interaction.guild.id, target_user.id)
+            )
+            result = await cursor.fetchone()
+            total_earned = result[0] if result else 0
+            await cursor.close()
+            
+            # Получить последние транзакции
+            cursor = await conn.execute(
+                """SELECT amount, transaction_type, description, timestamp 
+                   FROM transactions 
+                   WHERE guild_id = ? AND (from_user_id = ? OR to_user_id = ?) 
+                   ORDER BY timestamp DESC LIMIT 5""",
+                (interaction.guild.id, target_user.id, target_user.id)
+            )
+            recent_transactions = await cursor.fetchall()
+            await cursor.close()
         
         embed = discord.Embed(
             title=f"💰 Кошелек {target_user.display_name}",
@@ -69,65 +70,62 @@ class Personal(commands.Cog):
         
         embed.set_thumbnail(url=target_user.avatar.url if target_user.avatar else target_user.default_avatar.url)
         
-        await ctx.respond(embed=embed)
+        await interaction.response.send_message(embed=embed)
     
-    @commands.slash_command(name="работа", description="Поработать и заработать деньги")
-    async def work(self, ctx):
+    @app_commands.command(name="работа", description="Поработать и заработать деньги")
+    async def work(self, interaction: discord.Interaction):
         """Команда для работы"""
-        conn = sqlite3.connect(self.bot.db_path)
-        cursor = conn.cursor()
-        
-        # Проверить кулдаун
-        cursor.execute(
-            "SELECT last_work FROM wallets WHERE guild_id = ? AND user_id = ?",
-            (ctx.guild.id, ctx.author.id)
-        )
-        result = cursor.fetchone()
-        
-        if result and result[0]:
-            last_work = datetime.fromisoformat(result[0])
-            cooldown_hours = self.bot.config["personal_economy"]["work_cooldown_hours"]
-            next_work = last_work + timedelta(hours=cooldown_hours)
+        async with sqlite3.connect(self.bot.db_path) as conn:
+            cursor = await conn.execute(
+                "SELECT last_work FROM wallets WHERE guild_id = ? AND user_id = ?",
+                (interaction.guild.id, interaction.user.id)
+            )
+            result = await cursor.fetchone()
+            await cursor.close()
             
-            if datetime.now() < next_work:
-                remaining = next_work - datetime.now()
-                hours, remainder = divmod(remaining.seconds, 3600)
-                minutes, _ = divmod(remainder, 60)
+            if result and result[0]:
+                last_work = datetime.fromisoformat(result[0])
+                cooldown_hours = self.bot.config["personal_economy"]["work_cooldown_hours"]
+                next_work = last_work + timedelta(hours=cooldown_hours)
                 
-                embed = discord.Embed(
-                    title="⏰ Слишком рано для работы",
-                    description=f"Вы можете работать снова через {hours}ч {minutes}м",
-                    color=0xFF6B35
-                )
-                await ctx.respond(embed=embed)
-                return
-        
-        # Случайная награда
-        min_reward = self.bot.config["personal_economy"]["work_min_reward"]
-        max_reward = self.bot.config["personal_economy"]["work_max_reward"]
-        reward = random.randint(min_reward, max_reward)
-        
-        # Случайная работа
-        jobs = [
-            "программировали Discord бота", "торговали криптовалютой", "писали документацию",
-            "оптимизировали базу данных", "проводили код-ревью", "настраивали сервер",
-            "разрабатывали API", "тестировали приложение", "изучали новые технологии",
-            "участвовали в хакатоне", "консультировали клиентов", "создавали контент"
-        ]
-        job_description = f"Вы {random.choice(jobs)}"
-        
-        # Добавить деньги
-        new_balance, tax = await self.bot.add_user_money(
-            ctx.guild, ctx.author, reward, "work", job_description
-        )
-        
-        # Обновить время последней работы
-        cursor.execute(
-            "UPDATE wallets SET last_work = ? WHERE guild_id = ? AND user_id = ?",
-            (datetime.now().isoformat(), ctx.guild.id, ctx.author.id)
-        )
-        conn.commit()
-        conn.close()
+                if datetime.now() < next_work:
+                    remaining = next_work - datetime.now()
+                    hours, remainder = divmod(remaining.seconds, 3600)
+                    minutes, _ = divmod(remainder, 60)
+                    
+                    embed = discord.Embed(
+                        title="⏰ Слишком рано для работы",
+                        description=f"Вы можете работать снова через {hours}ч {minutes}м",
+                        color=0xFF6B35
+                    )
+                    await interaction.response.send_message(embed=embed)
+                    return
+            
+            # Случайная награда
+            min_reward = self.bot.config["personal_economy"]["work_min_reward"]
+            max_reward = self.bot.config["personal_economy"]["work_max_reward"]
+            reward = random.randint(min_reward, max_reward)
+            
+            # Случайная работа
+            jobs = [
+                "программировали Discord бота", "торговали криптовалютой", "писали документацию",
+                "оптимизировали базу данных", "проводили код-ревью", "настраивали сервер",
+                "разрабатывали API", "тестировали приложение", "изучали новые технологии",
+                "участвовали в хакатоне", "консультировали клиентов", "создавали контент"
+            ]
+            job_description = f"Вы {random.choice(jobs)}"
+            
+            # Добавить деньги
+            new_balance = await self.bot.add_user_money(
+                interaction.guild, interaction.user, reward, "work", job_description
+            )
+            
+            # Обновить время последней работы
+            await conn.execute(
+                "UPDATE wallets SET last_work = ? WHERE guild_id = ? AND user_id = ?",
+                (datetime.now().isoformat(), interaction.guild.id, interaction.user.id)
+            )
+            await conn.commit()
         
         embed = discord.Embed(
             title="💼 Работа выполнена!",
@@ -141,65 +139,55 @@ class Personal(commands.Cog):
             inline=True
         )
         
-        if tax > 0:
-            embed.add_field(
-                name="Налог",
-                value=f"-{tax} монет ({self.bot.config['personal_economy']['tax_rate']*100:.0f}%)",
-                inline=True
-            )
-        
         embed.add_field(
             name="Новый баланс",
             value=f"{new_balance:,} монет",
             inline=True
         )
         
-        await ctx.respond(embed=embed)
+        await interaction.response.send_message(embed=embed)
     
-    @commands.slash_command(name="ежедневно", description="Получить ежедневную награду")
-    async def daily(self, ctx):
+    @app_commands.command(name="ежедневно", description="Получить ежедневную награду")
+    async def daily(self, interaction: discord.Interaction):
         """Команда для ежедневной награды"""
-        conn = sqlite3.connect(self.bot.db_path)
-        cursor = conn.cursor()
-        
-        # Проверить кулдаун
-        cursor.execute(
-            "SELECT last_daily FROM wallets WHERE guild_id = ? AND user_id = ?",
-            (ctx.guild.id, ctx.author.id)
-        )
-        result = cursor.fetchone()
-        
-        if result and result[0]:
-            last_daily = datetime.fromisoformat(result[0])
-            next_daily = last_daily + timedelta(days=1)
+        async with sqlite3.connect(self.bot.db_path) as conn:
+            cursor = await conn.execute(
+                "SELECT last_daily FROM wallets WHERE guild_id = ? AND user_id = ?",
+                (interaction.guild.id, interaction.user.id)
+            )
+            result = await cursor.fetchone()
+            await cursor.close()
             
-            if datetime.now() < next_daily:
-                remaining = next_daily - datetime.now()
-                hours, remainder = divmod(remaining.seconds, 3600)
-                minutes, _ = divmod(remainder, 60)
+            if result and result[0]:
+                last_daily = datetime.fromisoformat(result[0])
+                next_daily = last_daily + timedelta(days=1)
                 
-                embed = discord.Embed(
-                    title="⏰ Ежедневная награда уже получена",
-                    description=f"Следующая награда через {remaining.days}д {hours}ч {minutes}м",
-                    color=0xFF6B35
-                )
-                await ctx.respond(embed=embed)
-                return
-        
-        reward = self.bot.config["personal_economy"]["daily_reward"]
-        
-        # Добавить деньги
-        new_balance, tax = await self.bot.add_user_money(
-            ctx.guild, ctx.author, reward, "daily", "Ежедневная награда"
-        )
-        
-        # Обновить время последней награды
-        cursor.execute(
-            "UPDATE wallets SET last_daily = ? WHERE guild_id = ? AND user_id = ?",
-            (datetime.now().isoformat(), ctx.guild.id, ctx.author.id)
-        )
-        conn.commit()
-        conn.close()
+                if datetime.now() < next_daily:
+                    remaining = next_daily - datetime.now()
+                    hours, remainder = divmod(remaining.seconds, 3600)
+                    minutes, _ = divmod(remainder, 60)
+                    
+                    embed = discord.Embed(
+                        title="⏰ Ежедневная награда уже получена",
+                        description=f"Следующая награда через {remaining.days}д {hours}ч {minutes}м",
+                        color=0xFF6B35
+                    )
+                    await interaction.response.send_message(embed=embed)
+                    return
+            
+            reward = self.bot.config["personal_economy"]["daily_reward"]
+            
+            # Добавить деньги
+            new_balance = await self.bot.add_user_money(
+                interaction.guild, interaction.user, reward, "daily", "Ежедневная награда"
+            )
+            
+            # Обновить время последней награды
+            await conn.execute(
+                "UPDATE wallets SET last_daily = ? WHERE guild_id = ? AND user_id = ?",
+                (datetime.now().isoformat(), interaction.guild.id, interaction.user.id)
+            )
+            await conn.commit()
         
         embed = discord.Embed(
             title="🎁 Ежедневная награда получена!",
@@ -226,26 +214,30 @@ class Personal(commands.Cog):
             inline=True
         )
         
-        await ctx.respond(embed=embed)
+        await interaction.response.send_message(embed=embed)
     
-    @commands.slash_command(name="перевести", description="Перевести деньги другому пользователю")
-    async def transfer(self, ctx, получатель: discord.Member, сумма: int):
+    @app_commands.command(name="перевести", description="Перевести деньги другому пользователю")
+    @app_commands.describe(
+        получатель="Пользователь, которому переводим деньги",
+        сумма="Сумма для перевода"
+    )
+    async def transfer(self, interaction: discord.Interaction, получатель: discord.Member, сумма: int):
         """Команда для перевода денег"""
-        if получатель == ctx.author:
-            await ctx.respond("❌ Нельзя переводить деньги самому себе!", ephemeral=True)
+        if получатель == interaction.user:
+            await interaction.response.send_message("❌ Нельзя переводить деньги самому себе!", ephemeral=True)
             return
         
         if получатель.bot:
-            await ctx.respond("❌ Нельзя переводить деньги ботам!", ephemeral=True)
+            await interaction.response.send_message("❌ Нельзя переводить деньги ботам!", ephemeral=True)
             return
         
         if сумма <= 0:
-            await ctx.respond("❌ Сумма должна быть положительной!", ephemeral=True)
+            await interaction.response.send_message("❌ Сумма должна быть положительной!", ephemeral=True)
             return
         
         # Выполнить перевод
         success, new_balance, fee = await self.bot.transfer_money(
-            ctx.guild, ctx.author, получатель, сумма
+            interaction.guild, interaction.user, получатель, сумма
         )
         
         if not success:
@@ -254,7 +246,7 @@ class Personal(commands.Cog):
                 description=f"У вас {new_balance:,} монет, а нужно {сумма + fee:,} (включая комиссию {fee} монет)",
                 color=0xFF0000
             )
-            await ctx.respond(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
         
         embed = discord.Embed(
@@ -276,14 +268,14 @@ class Personal(commands.Cog):
             inline=True
         )
         
-        await ctx.respond(embed=embed)
+        await interaction.response.send_message(embed=embed)
         
         # Уведомить получателя
         try:
-            recipient_balance = await self.bot.get_user_balance(ctx.guild, получатель)
+            recipient_balance = await self.bot.get_user_balance(interaction.guild, получатель)
             dm_embed = discord.Embed(
                 title="💰 Вы получили перевод!",
-                description=f"{ctx.author.mention} перевел вам **{сумма:,}** монет",
+                description=f"{interaction.user.mention} перевел вам **{сумма:,}** монет",
                 color=0x00FF00
             )
             dm_embed.add_field(
@@ -295,67 +287,65 @@ class Personal(commands.Cog):
         except:
             pass  # Если не удалось отправить ЛС
     
-    @commands.slash_command(name="лидеры", description="Показать топ самых богатых пользователей")
-    async def leaderboard(self, ctx):
+    @app_commands.command(name="лидеры", description="Показать топ самых богатых пользователей")
+    async def leaderboard(self, interaction: discord.Interaction):
         """Команда для показа таблицы лидеров"""
-        conn = sqlite3.connect(self.bot.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute(
-            """SELECT user_id, balance, total_earned 
-               FROM wallets 
-               WHERE guild_id = ? 
-               ORDER BY balance DESC 
-               LIMIT 10""",
-            (ctx.guild.id,)
-        )
-        
-        results = cursor.fetchall()
-        conn.close()
-        
-        if not results:
-            embed = discord.Embed(
-                title="📊 Таблица лидеров",
-                description="Пока никто не зарегистрирован в экономической системе.",
-                color=0x2F3136
+        async with sqlite3.connect(self.bot.db_path) as conn:
+            cursor = await conn.execute(
+                """SELECT user_id, balance, total_earned 
+                   FROM wallets 
+                   WHERE guild_id = ? 
+                   ORDER BY balance DESC 
+                   LIMIT 10""",
+                (interaction.guild.id,)
             )
-            await ctx.respond(embed=embed)
-            return
-        
-        embed = discord.Embed(
-            title="📊 Топ-10 самых богатых",
-            color=0xFFD700
-        )
-        
-        leaderboard_text = ""
-        for i, (user_id, balance, total_earned) in enumerate(results, 1):
-            try:
-                user = ctx.guild.get_member(user_id)
-                if user:
-                    medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-                    leaderboard_text += f"{medal} **{user.display_name}** — {balance:,} монет\n"
-            except:
-                continue
-        
-        embed.description = leaderboard_text or "Нет активных пользователей"
-        
-        # Показать позицию текущего пользователя
-        cursor = conn.cursor()
-        cursor.execute(
-            """SELECT COUNT(*) + 1 as position 
-               FROM wallets 
-               WHERE guild_id = ? AND balance > (
-                   SELECT balance FROM wallets WHERE guild_id = ? AND user_id = ?
-               )""",
-            (ctx.guild.id, ctx.guild.id, ctx.author.id)
-        )
-        result = cursor.fetchone()
-        user_position = result[0] if result else "N/A"
-        
-        user_balance = await self.bot.get_user_balance(ctx.guild, ctx.author)
-        embed.set_footer(text=f"Ваша позиция: #{user_position} ({user_balance:,} монет)")
-        
-        await ctx.respond(embed=embed)
+            
+            results = await cursor.fetchall()
+            await cursor.close()
+            
+            if not results:
+                embed = discord.Embed(
+                    title="📊 Таблица лидеров",
+                    description="Пока никто не зарегистрирован в экономической системе.",
+                    color=0x2F3136
+                )
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+                return
+            
+            embed = discord.Embed(
+                title="📊 Топ-10 самых богатых",
+                color=0xFFD700
+            )
+            
+            leaderboard_text = ""
+            for i, (user_id, balance, total_earned) in enumerate(results, 1):
+                try:
+                    user = interaction.guild.get_member(user_id)
+                    if user:
+                        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+                        leaderboard_text += f"{medal} **{user.display_name}** — {balance:,} монет\n"
+                except:
+                    continue
+            
+            embed.description = leaderboard_text or "Нет активных пользователей"
+            
+            # Показать позицию текущего пользователя
+            cursor = await conn.execute(
+                """SELECT COUNT(*) + 1 as position 
+                   FROM wallets 
+                   WHERE guild_id = ? AND balance > (
+                       SELECT balance FROM wallets WHERE guild_id = ? AND user_id = ?
+                   )""",
+                (interaction.guild.id, interaction.guild.id, interaction.user.id)
+            )
+            result = await cursor.fetchone()
+            await cursor.close()
+            
+            user_position = result[0] if result else "N/A"
+            user_balance = await self.bot.get_user_balance(interaction.guild, interaction.user)
+            embed.set_footer(text=f"Ваша позиция: #{user_position} ({user_balance:,} монет)")
+            
+            await interaction.response.send_message(embed=embed)
 
-def setup(bot):
-    bot.add_cog(Personal(bot))
+async def setup(bot):
+    await bot.add_cog(Personal(bot))

@@ -1,0 +1,36 @@
+{
+  "initial_treasury": 1000,
+  "income_per_member": 2,
+  "costs": {
+    "channel_create": 100,
+    "channel_delete": 30,
+    "role_assign": 50,
+    "role_remove": 25,
+    "emoji_create": 200,
+    "emoji_delete": 50,
+    "member_ban": 150,
+    "member_kick": 75,
+    "member_timeout": 40,
+    "message_delete": 5,
+    "bulk_message_delete": 25,
+    "server_name_change": 300,
+    "server_icon_change": 250,
+    "webhook_create": 80,
+    "integration_add": 120,
+    "automod_rule_create": 200,
+    "automod_action": 10
+  },
+  "personal_economy": {
+    "starting_balance": 100,
+    "work_cooldown_hours": 4,
+    "work_min_reward": 50,
+    "work_max_reward": 200,
+    "daily_reward": 150,
+    "tax_rate": 0.05,
+    "transfer_fee": 0.02
+  },
+  "update_interval": 60,
+  "chart_interval": 600,
+  "event_min_hours": 1,
+  "event_max_hours": 12
+}

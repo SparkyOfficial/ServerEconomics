@@ -1,4 +1,5 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import sqlite3
 import random
@@ -71,136 +72,308 @@ class Events(commands.Cog):
             }
         ]
     
-    @commands.slash_command(name="событие", description="Проверить текущее событие или создать новое")
-    async def event_command(self, ctx, force: bool = False):
+    @app_commands.command(name="событие", description="Проверить текущее событие или создать новое")
+    @app_commands.describe(
+        force="Принудительно создать новое событие, даже если есть активное"
+    )
+    async def event_command(self, interaction: discord.Interaction, force: bool = False):
         """Команда для работы с событиями"""
-        if force and not ctx.author.guild_permissions.administrator:
-            await ctx.respond("❌ Только администраторы могут принудительно создавать события!", ephemeral=True)
+        # Проверка на администратора
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Только администраторы могут управлять событиями.", ephemeral=True)
             return
         
-        # Проверка активного события
-        conn = sqlite3.connect(self.bot.db_path)
-        cursor = conn.cursor()
+        # Если не принудительно, проверяем, есть ли активное событие
+        if not force:
+            async with sqlite3.connect(self.bot.db_path) as conn:
+                cursor = await conn.execute(
+                    "SELECT id FROM events WHERE guild_id = ? AND status = 'active' AND (expires_at > datetime('now') OR expires_at IS NULL)",
+                    (interaction.guild.id,)
+                )
+                active_event = await cursor.fetchone()
+                await cursor.close()
+            
+            if active_event:
+                await interaction.response.send_message(
+                    "ℹ️ Уже есть активное событие. Используйте параметр `force=True`, чтобы создать новое.", 
+                    ephemeral=True
+                )
+                return
         
-        cursor.execute(
-            "SELECT * FROM events WHERE guild_id = ? AND status = 'active' ORDER BY timestamp DESC LIMIT 1",
-            (ctx.guild.id,)
+        # Создаем новое событие
+        message = await self.create_random_event(interaction.guild)
+        if message:
+            await interaction.response.send_message(
+                f"✅ Создано новое событие: {message.jump_url}", 
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "❌ Не удалось создать событие. Проверьте настройки бота.", 
+                ephemeral=True
+            )
+
+    @app_commands.command(name="событие", description="Создать новое событие для голосования")
+    @app_commands.describe(
+        title="Название события",
+        description="Описание события",
+        option1="Первый вариант",
+        effect1="Эффект первого варианта",
+        option2="Второй вариант",
+        effect2="Эффект второго варианта",
+        option3="Третий вариант (опционально)",
+        effect3="Эффект третьего варианта (опционально)",
+        duration="Продолжительность голосования в минутах (по умолчанию 30)"
+    )
+    async def event_command(
+        self,
+        interaction: discord.Interaction,
+        title: str,
+        description: str,
+        option1: str,
+        effect1: int,
+        option2: str,
+        effect2: int,
+        option3: str = None,
+        effect3: int = 0,
+        duration: int = 30
+    ):
+        """Создать новое событие для голосования"""
+        # Проверка прав администратора
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Только администраторы могут создавать события.", ephemeral=True)
+            return
+
+        # Создание опций события
+        options = [
+            {"text": option1, "effect": effect1, "desc": ""},
+            {"text": option2, "effect": effect2, "desc": ""}
+        ]
+        
+        if option3 and effect3 != 0:
+            options.append({"text": option3, "effect": effect3, "desc": ""})
+
+        # Создание события в базе данных
+        async with sqlite3.connect(self.bot.db_path) as conn:
+            cursor = await conn.execute(
+                """
+                INSERT INTO events (guild_id, title, description, status, created_at, expires_at)
+                VALUES (?, ?, ?, 'active', datetime('now'), datetime('now', ? || ' minutes'))
+                """,
+                (interaction.guild.id, title, description, duration)
+            )
+            
+            event_id = cursor.lastrowid
+            await cursor.close()
+        
+        # Создание кнопок для голосования
+        view = EventView(self.bot, event_id, options)
+        
+        # Создание embed с информацией о событии
+        embed = discord.Embed(
+            title=f"📢 {title}",
+            description=description,
+            color=0x2F3136
         )
         
-        active_event = cursor.fetchone()
-        conn.close()
-        
-        if active_event and not force:
-            # Показать активное событие
-            event_id, guild_id, event_type, description, amount, status, timestamp = active_event
-            
-            embed = discord.Embed(
-                title=f"📋 Активное событие",
-                description=f"**{event_type}**\n{description}",
-                color=0xFFD700
+        for i, option in enumerate(options, 1):
+            effect_sign = '+' if option['effect'] >= 0 else ''
+            embed.add_field(
+                name=f"Вариант {i}: {option['text']}",
+                value=f"Эффект: {effect_sign}{option['effect']} монет",
+                inline=False
             )
-            embed.add_field(name="Время создания", value=timestamp)
-            embed.add_field(name="Статус", value="Ожидает решения")
-            
-            await ctx.respond(embed=embed)
-        else:
-            # Создать новое событие
-            if force:
-                await ctx.defer()
-            
-            await self.create_random_event(ctx.guild)
-            
-            if force:
-                await ctx.followup.send("✅ Новое событие создано!")
-            else:
-                await ctx.respond("✅ Новое событие создано!")
-    
+        
+        embed.set_footer(text=f"Голосование активно {duration} минут")
+        
+        # Отправка сообщения с кнопками
+        await interaction.response.send_message(embed=embed, view=view)
+        message = await interaction.original_response()
+        
+        # Сохранение ссылки на сообщение в базе данных
+        cursor.execute(
+            "UPDATE events SET message_id = ?, channel_id = ? WHERE id = ?",
+            (message.id, message.channel.id, event_id)
+        )
+        
+        # Сохранение ссылки на сообщение в объекте view
+        view.message = message
+        
+        conn.commit()
+        conn.close()
+
     async def create_random_event(self, guild):
         """Создание случайного события"""
         event_data = random.choice(self.event_types)
         
-        # Сохранение в базу данных
+        # Создание события в базе данных
         conn = sqlite3.connect(self.bot.db_path)
         cursor = conn.cursor()
         
+        # Создаем событие с временем истечения (30 минут по умолчанию)
+        duration = 30  # minutes
         cursor.execute(
-            "INSERT INTO events (guild_id, event_type, description, amount, status) VALUES (?, ?, ?, ?, ?)",
-            (guild.id, event_data["name"], event_data["description"], 0, "active")
+            """
+            INSERT INTO events (guild_id, title, description, status, created_at, expires_at)
+            VALUES (?, ?, ?, 'active', datetime('now'), datetime('now', ? || ' minutes'))
+            """,
+            (guild.id, event_data['name'], event_data['description'], duration)
         )
         
         event_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
         
-        # Отправка в канал
-        channel = self.bot.get_channel(self.bot.chart_channel_id)
-        if not channel:
-            return
+        # Создаем view с кнопками для голосования
+        view = EventView(self.bot, event_id, event_data['options'])
         
-        from utils.visualization import create_event_image
-        
-        # Создание изображения для события
-        image_path = create_event_image(event_data['name'], event_data['description'], event_data['icon'])
-        
+        # Создаем embed с информацией о событии
         embed = discord.Embed(
             title=f"{event_data['icon']} {event_data['name']}",
-            description="**Внимание! Новое экономическое событие!**\n\nВыберите один из вариантов ниже.",
-            color=0xFF6B35
+            description=event_data["description"],
+            color=0x2F3136
         )
-        embed.set_footer(text=f"ID события: {event_id} | Время на решение: 30 минут")
-
-        file = None
-        if image_path:
-            file = discord.File(image_path, filename="event.png")
-            embed.set_image(url="attachment://event.png")
-
-        # Создание кнопок для выбора
-        view = EventView(self.bot, event_id, event_data["options"])
         
-        message = await channel.send(embed=embed, file=file, view=view)
-
-        if image_path:
-            import os
-            os.remove(image_path)
+        # Добавляем варианты ответа с эффектами
+        for i, option in enumerate(event_data['options'], 1):
+            effect_sign = '+' if option['effect'] >= 0 else ''
+            embed.add_field(
+                name=f"Вариант {i}: {option['text']}",
+                value=f"{option['desc']}\nЭффект: {effect_sign}{option['effect']} монет",
+                inline=False
+            )
         
-        # Автоматическое закрытие через 30 минут
-        await asyncio.sleep(1800)  # 30 минут
-        await self.auto_resolve_event(event_id, guild)
-    
+        embed.set_footer(text=f"Голосование активно {duration} минут")
+        
+        # Отправка сообщения в канал событий
+        channel = guild.get_channel(self.bot.config['events_channel_id'])
+        if channel:
+            try:
+                message = await channel.send(embed=embed, view=view)
+                
+                # Сохраняем информацию о сообщении в БД
+                cursor.execute(
+                    "UPDATE events SET message_id = ?, channel_id = ? WHERE id = ?",
+                    (message.id, message.channel.id, event_id)
+                )
+                
+                # Сохраняем ссылку на сообщение в view
+                view.message = message
+                
+                conn.commit()
+                return message
+                
+            except Exception as e:
+                print(f"Ошибка при отправке сообщения о событии: {e}")
+        
+        conn.close()
+        return None
+
     async def auto_resolve_event(self, event_id, guild):
         """Автоматическое разрешение события"""
         conn = sqlite3.connect(self.bot.db_path)
+        conn.row_factory = sqlite3.Row  # Для доступа к полям по имени
         cursor = conn.cursor()
         
+        # Получаем полные данные о событии
         cursor.execute(
-            "SELECT status FROM events WHERE id = ?",
-            (event_id,)
+            """
+            SELECT e.*, m.channel_id, m.message_id
+            FROM events e
+            LEFT JOIN (
+                SELECT event_id, channel_id, message_id
+                FROM events
+                WHERE id = ?
+            ) m ON e.id = m.event_id
+            WHERE e.id = ?
+            """,
+            (event_id, event_id)
         )
         
-        result = cursor.fetchone()
-        if result and result[0] == "active":
-            # Событие не было разрешено, применяем случайный исход
+        event = cursor.fetchone()
+        if not event or event['status'] != 'active':
+            conn.close()
+            return
+            
+        # Получаем данные о событии из конфига
+        event_data = next((e for e in self.event_types if e['name'] == event['title']), None)
+        if not event_data:
+            conn.close()
+            return
+            
+        # Выбираем случайный вариант
+        option = random.choice(event_data['options'])
+        
+        # Применяем эффект к казне
+        success, new_balance = await self.bot.spend_money(
+            guild,
+            -option['effect'],  # Отрицательный эффект для увеличения казны
+            f"Событие: {event_data['name']} (автоматически)",
+            apply_modifiers=False
+        )
+        
+        # Обновляем статус события
+        cursor.execute(
+            "UPDATE events SET status = 'auto_resolved', amount = ? WHERE id = ?",
+            (option['effect'], event_id)
+        )
+        
+        # Применяем модификатор (если есть)
+        if 'modifier' in option:
+            mod = option['modifier']
+            expires_at = (datetime.now() + timedelta(hours=mod['duration_hours'])).isoformat()
+            
             cursor.execute(
-                "UPDATE events SET status = 'auto_resolved' WHERE id = ?",
-                (event_id,)
+                """
+                INSERT INTO modifiers (guild_id, modifier_type, value, description, expires_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (guild.id, mod['type'], mod['value'], mod['description'], expires_at)
             )
-            
-            # Случайный штраф за бездействие
-            penalty = random.randint(100, 300)
-            await self.bot.spend_money(guild, penalty, "Штраф за нерешенное событие")
-            
-            # Уведомление
-            channel = self.bot.get_channel(self.bot.chart_channel_id)
-            if channel:
-                embed = discord.Embed(
-                    title="⏰ Событие автоматически закрыто",
-                    description=f"Событие не было разрешено вовремя. Штраф: {penalty} монет",
-                    color=0xFF0000
-                )
-                await channel.send(embed=embed)
+        
+        # Получаем канал и сообщение
+        channel_id = event['channel_id']
+        message_id = event['message_id']
         
         conn.commit()
         conn.close()
+        
+        # Обновляем сообщение с событием
+        if channel_id and message_id:
+            try:
+                channel = guild.get_channel(channel_id)
+                if channel:
+                    message = await channel.fetch_message(message_id)
+                    
+                    # Создаем новый embed с результатом
+                    embed = message.embeds[0]
+                    embed.color = 0xFFA500  # Оранжевый цвет для автоматически решенного события
+                    
+                    # Обновляем описание
+                    effect_sign = '+' if option['effect'] >= 0 else ''
+                    embed.add_field(
+                        name="⏰ Автоматический результат",
+                        value=f"Выбрано: **{option['text']}**\nЭффект: {effect_sign}{option['effect']} монет",
+                        inline=False
+                    )
+                    
+                    # Отключаем кнопки
+                    for item in message.components[0].children:
+                        if isinstance(item, discord.ui.Button):
+                            item.disabled = True
+                    
+                    await message.edit(embed=embed, view=message.components[0])
+                    
+            except Exception as e:
+                print(f"Ошибка при обновлении сообщения о событии: {e}")
+                
+            # Отправляем уведомление в канал экономики
+            channel = guild.get_channel(self.bot.config['events_channel_id'])
+            if channel:
+                embed = discord.Embed(
+                    title=f"⏰ Событие автоматически завершено: {event_data['name']}",
+                    description=f"Выбрано: **{option['text']}**\nЭффект: {effect_sign}{option['effect']} монет",
+                    color=0xFFA500
+                )
+                await channel.send(embed=embed)
 
 class EventView(discord.ui.View):
     def __init__(self, bot, event_id, options):
@@ -216,9 +389,49 @@ class EventView(discord.ui.View):
             self.add_item(button)
     
     async def on_timeout(self):
-        """Обработка таймаута"""
+        # Отключение кнопок по истечении времени
         for item in self.children:
-            item.disabled = True
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
+        
+        try:
+            # Обновление сообщения, если оно доступно
+            if hasattr(self, 'message') and self.message:
+                await self.message.edit(view=self)
+            
+            # Закрытие события в БД
+            conn = sqlite3.connect(self.bot.db_path)
+            cursor = conn.cursor()
+            
+            # Обновляем статус события
+            cursor.execute(
+                "UPDATE events SET status = 'expired' WHERE id = ?",
+                (self.event_id,)
+            )
+            
+            # Получаем данные о событии для уведомления
+            cursor.execute(
+                "SELECT title, description FROM events WHERE id = ?",
+                (self.event_id,)
+            )
+            event_data = cursor.fetchone()
+            
+            conn.commit()
+            conn.close()
+            
+            # Отправляем уведомление о завершении события
+            if event_data and hasattr(self, 'message') and self.message:
+                embed = discord.Embed(
+                    title=f"⏰ Время голосования истекло: {event_data[0]}",
+                    description=event_data[1],
+                    color=0xFFA500
+                )
+                await self.message.channel.send(embed=embed)
+                
+        except Exception as e:
+            print(f"Ошибка при обработке таймаута события: {e}")
+        conn.close()
+
 
 class EventButton(discord.ui.Button):
     def __init__(self, option_id, option_data):
@@ -234,129 +447,82 @@ class EventButton(discord.ui.Button):
         self.votes = set()
     
     async def callback(self, interaction: discord.Interaction):
-        """Обработка нажатия кнопки"""
-        user_id = interaction.user.id
-        
-        # Проверка, голосовал ли уже пользователь
-        for item in self.view.children:
-            if isinstance(item, EventButton) and user_id in item.votes:
-                item.votes.remove(user_id)
-        
-        # Добавление голоса
-        self.votes.add(user_id)
+        # Обработка голосования
+        self.votes.add(interaction.user.id)
         
         # Обновление сообщения
-        embed = discord.Embed(
-            title="📊 Голосование по событию",
-            description="Текущие результаты голосования:",
-            color=0x2F3136
+        await interaction.response.edit_message(
+            content=f"✅ {interaction.user.mention} проголосовал за: {self.option_data['text']}",
+            view=self.view
         )
         
-        total_votes = sum(len(item.votes) for item in self.view.children if isinstance(item, EventButton))
-        
-        for item in self.view.children:
-            if isinstance(item, EventButton):
-                vote_count = len(item.votes)
-                percentage = (vote_count / total_votes * 100) if total_votes > 0 else 0
-                
-                embed.add_field(
-                    name=f"{item.label} ({vote_count} голосов)",
-                    value=f"{item.description}\nЭффект: {item.effect:+} монет\n{percentage:.1f}%",
-                    inline=False
-                )
-        
-        await interaction.response.edit_message(embed=embed, view=self.view)
-        
-        # Проверка на администратора для мгновенного применения
+        # Если голосовал администратор, сразу применяем результат
         if interaction.user.guild_permissions.administrator:
             await self.apply_event_result(interaction)
     
     async def apply_event_result(self, interaction):
-        """Применение результата события"""
-        # Определение победившего варианта
-        max_votes = max(len(item.votes) for item in self.view.children if isinstance(item, EventButton))
-        winning_options = [item for item in self.view.children 
-                          if isinstance(item, EventButton) and len(item.votes) == max_votes]
-        
-        if len(winning_options) == 1:
-            winner = winning_options[0]
-        else:
-            # В случае ничьей выбираем случайно
-            winner = random.choice(winning_options)
-        
-        # Применение эффекта
-        guild = interaction.guild
-        # Применение модификатора, если он есть
-        if 'modifier' in winner.option_data:
-            mod = winner.option_data['modifier']
-            expires_at = datetime.now() + timedelta(hours=mod['duration_hours'])
-            
-            cursor.execute(
-                "INSERT INTO modifiers (guild_id, modifier_type, value, description, expires_at) VALUES (?, ?, ?, ?, ?)",
-                (guild.id, mod['type'], mod['value'], mod['description'], expires_at)
-            )
-
-        if winner.effect > 0:
-            # Добавление денег
-            conn = sqlite3.connect(self.view.bot.db_path)
-            cursor = conn.cursor()
-            
-            current_treasury = await self.view.bot.get_treasury(guild)
-            new_treasury = current_treasury + winner.effect
-            
-            cursor.execute(
-                "INSERT INTO economy (guild_id, treasury) VALUES (?, ?)",
-                (guild.id, new_treasury)
-            )
-            
-            cursor.execute(
-                "INSERT INTO transactions (guild_id, amount, description) VALUES (?, ?, ?)",
-                (guild.id, winner.effect, f"Событие: {winner.label}")
-            )
-            
-            conn.commit()
-            conn.close()
-        else:
-            # Трата денег
-            await self.view.bot.spend_money(guild, abs(winner.effect), f"Событие: {winner.label}")
-        
-        # Обновление статуса события
+        # Применение эффекта события
         conn = sqlite3.connect(self.view.bot.db_path)
         cursor = conn.cursor()
         
-        cursor.execute(
-            "UPDATE events SET status = 'resolved', amount = ? WHERE id = ?",
-            (winner.effect, self.view.event_id)
+        # Обновление казны
+        success, new_balance = await self.view.bot.spend_money(
+            interaction.guild,
+            -self.effect,  # Отрицательный эффект для увеличения казны
+            f"Событие: {self.option_data['text']}",
+            apply_modifiers=False
         )
+        
+        # Обновление статуса события
+        cursor.execute(
+            "UPDATE events SET status = 'completed', amount = ? WHERE id = ?",
+            (self.effect, self.view.event_id)
+        )
+        
+        # Применение модификатора (если есть)
+        if 'modifier' in self.option_data:
+            mod = self.option_data['modifier']
+            expires_at = (datetime.now() + timedelta(hours=mod['duration_hours'])).isoformat()
+            
+            cursor.execute(
+                """
+                INSERT INTO modifiers (guild_id, modifier_type, value, description, expires_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (interaction.guild.id, mod['type'], mod['value'], mod['description'], expires_at)
+            )
         
         conn.commit()
         conn.close()
         
-        # Финальное сообщение
+        # Отправка результата
         embed = discord.Embed(
-            title="✅ Событие разрешено",
-            description=f"Выбран вариант: **{winner.label}**\n{winner.description}",
-            color=0x00FF00 if winner.effect >= 0 else 0xFF0000
+            title=f"🎯 Результат события",
+            description=f"**Выбрано:** {self.option_data['text']}\n**Эффект:** {self.effect} монет",
+            color=0x2F3136
         )
         
-        embed.add_field(
-            name="Эффект на экономику",
-            value=f"{winner.effect:+} монет",
-            inline=True
-        )
+        if success:
+            embed.add_field(name="Новый баланс", value=f"{new_balance:,} монет")
         
-        current_treasury = await self.view.bot.get_treasury(guild)
-        embed.add_field(
-            name="Текущая казна",
-            value=f"{current_treasury:,} монет",
-            inline=True
-        )
+        if 'modifier' in self.option_data:
+            mod = self.option_data['modifier']
+            embed.add_field(
+                name="🔧 Применен модификатор",
+                value=f"{mod['description']} на {mod['duration_hours']} часов",
+                inline=False
+            )
         
-        # Отключение кнопок
+        # Отключение всех кнопок
         for item in self.view.children:
-            item.disabled = True
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
         
-        await interaction.edit_original_response(embed=embed, view=self.view)
+        # Обновление сообщения с результатом
+        await interaction.followup.send(embed=embed)
+        
+        # Обновление исходного сообщения
+        await interaction.edit_original_response(view=self.view)
 
-def setup(bot):
-    bot.add_cog(Events(bot))
+async def setup(bot):
+    await bot.add_cog(Events(bot))

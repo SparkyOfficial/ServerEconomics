@@ -28,55 +28,53 @@ async def create_economy_chart(bot, guild_id=None):
     """Создание графика экономики"""
     try:
         # Получение данных за последние 12 часов
-        conn = sqlite3.connect(bot.db_path)
-        cursor = conn.cursor()
-        
-        twelve_hours_ago = datetime.now() - timedelta(hours=12)
-        
-        if guild_id:
-            cursor.execute(
-                """SELECT treasury, timestamp 
-                   FROM economy 
-                   WHERE guild_id = ? AND timestamp >= ? 
-                   ORDER BY timestamp""",
+        async with sqlite3.connect(bot.db_path) as conn:
+            twelve_hours_ago = datetime.now() - timedelta(hours=12)
+            
+            if guild_id:
+                cursor = await conn.execute(
+                    """SELECT treasury, timestamp 
+                       FROM economy 
+                       WHERE guild_id = ? AND timestamp >= ? 
+                       ORDER BY timestamp""",
+                    (guild_id, twelve_hours_ago)
+                )
+            else:
+                # Для всех серверов (берем первый найденный)
+                cursor = await conn.execute(
+                    """SELECT treasury, timestamp, guild_id
+                       FROM economy 
+                       WHERE timestamp >= ? 
+                       ORDER BY timestamp""",
+                    (twelve_hours_ago,)
+                )
+            
+            data = await cursor.fetchall()
+            await cursor.close()
+            
+            if not data:
+                return None
+            
+            # Если guild_id не указан, берем данные первого сервера
+            if not guild_id:
+                guild_id = data[0][2] if len(data[0]) > 2 else data[0][0]
+                data = [(row[0], row[1]) for row in data if (len(row) > 2 and row[2] == guild_id) or len(row) == 2]
+            
+            # Получение транзакций для пирога
+            cursor = await conn.execute(
+                """SELECT SUM(amount) as total, 
+                          CASE 
+                              WHEN amount > 0 THEN 'Доходы'
+                              ELSE 'Расходы'
+                          END as type
+                   FROM transactions 
+                   WHERE guild_id = ? AND timestamp >= ?
+                   GROUP BY type""",
                 (guild_id, twelve_hours_ago)
             )
-        else:
-            # Для всех серверов (берем первый найденный)
-            cursor.execute(
-                """SELECT treasury, timestamp, guild_id
-                   FROM economy 
-                   WHERE timestamp >= ? 
-                   ORDER BY timestamp""",
-                (twelve_hours_ago,)
-            )
-        
-        data = cursor.fetchall()
-        
-        if not data:
-            conn.close()
-            return None
-        
-        # Если guild_id не указан, берем данные первого сервера
-        if not guild_id:
-            guild_id = data[0][2] if len(data[0]) > 2 else data[0][0]
-            data = [(row[0], row[1]) for row in data if (len(row) > 2 and row[2] == guild_id) or len(row) == 2]
-        
-        # Получение транзакций для пирога
-        cursor.execute(
-            """SELECT SUM(amount) as total, 
-                      CASE 
-                          WHEN amount > 0 THEN 'Доходы'
-                          ELSE 'Расходы'
-                      END as type
-               FROM transactions 
-               WHERE guild_id = ? AND timestamp >= ?
-               GROUP BY type""",
-            (guild_id, twelve_hours_ago)
-        )
-        
-        transaction_data = cursor.fetchall()
-        conn.close()
+            
+            transaction_data = await cursor.fetchall()
+            await cursor.close()
         
         # Создание фигуры с двумя подграфиками
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
