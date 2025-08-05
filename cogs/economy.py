@@ -278,6 +278,224 @@ class Economy(commands.Cog):
                     )
                     embed.add_field(name="Текущий баланс", value=f"{new_balance} монет")
                     await log_channel.send(embed=embed)
+    
+    @commands.Cog.listener()
+    async def on_member_ban(self, guild, user):
+        """Обработка бана участника"""
+        cost = self.bot.config["costs"]["member_ban"]
+        success, new_balance = await self.bot.spend_money(
+            guild,
+            cost,
+            f"Бан пользователя {user.display_name}"
+        )
+        
+        if not success:
+            log_channel = self.bot.get_channel(self.bot.chart_channel_id)
+            if log_channel:
+                embed = discord.Embed(
+                    title="⚠️ Недостаточно средств",
+                    description=f"Не удалось списать {cost} монет за бан",
+                    color=0xFF0000
+                )
+                embed.add_field(name="Текущий баланс", value=f"{new_balance} монет")
+                await log_channel.send(embed=embed)
+    
+    @commands.Cog.listener()
+    async def on_member_remove(self, member):
+        """Обработка кика участника (приблизительно)"""
+        # Проверяем, был ли это кик через аудит лог
+        try:
+            async for entry in member.guild.audit_logs(limit=1, action=discord.AuditLogAction.kick):
+                if entry.target.id == member.id:
+                    cost = self.bot.config["costs"]["member_kick"]
+                    success, new_balance = await self.bot.spend_money(
+                        member.guild,
+                        cost,
+                        f"Кик пользователя {member.display_name}"
+                    )
+                    
+                    if not success:
+                        log_channel = self.bot.get_channel(self.bot.chart_channel_id)
+                        if log_channel:
+                            embed = discord.Embed(
+                                title="⚠️ Недостаточно средств",
+                                description=f"Не удалось списать {cost} монет за кик",
+                                color=0xFF0000
+                            )
+                            embed.add_field(name="Текущий баланс", value=f"{new_balance} монет")
+                            await log_channel.send(embed=embed)
+                    break
+        except:
+            pass  # Игнорируем ошибки доступа к аудит логу
+    
+    @commands.Cog.listener()
+    async def on_member_update(self, before, after):
+        """Обработка изменения ролей участника и таймаутов"""
+        # Проверка таймаута
+        if before.timed_out_until != after.timed_out_until and after.timed_out_until:
+            cost = self.bot.config["costs"]["member_timeout"]
+            success, new_balance = await self.bot.spend_money(
+                after.guild,
+                cost,
+                f"Таймаут пользователя {after.display_name}"
+            )
+            
+            if not success:
+                log_channel = self.bot.get_channel(self.bot.chart_channel_id)
+                if log_channel:
+                    embed = discord.Embed(
+                        title="⚠️ Недостаточно средств",
+                        description=f"Не удалось списать {cost} монет за таймаут",
+                        color=0xFF0000
+                    )
+                    embed.add_field(name="Текущий баланс", value=f"{new_balance} монет")
+                    await log_channel.send(embed=embed)
+        
+        # Проверка изменения ролей
+        new_roles = set(after.roles) - set(before.roles)
+        removed_roles = set(before.roles) - set(after.roles)
+        
+        if new_roles:
+            cost = self.bot.config["costs"]["role_assign"] * len(new_roles)
+            success, new_balance = await self.bot.spend_money(
+                after.guild,
+                cost,
+                f"Выдача {len(new_roles)} роли(ей) пользователю {after.display_name}"
+            )
+            
+            if not success:
+                log_channel = self.bot.get_channel(self.bot.chart_channel_id)
+                if log_channel:
+                    embed = discord.Embed(
+                        title="⚠️ Недостаточно средств",
+                        description=f"Не удалось списать {cost} монет за выдачу ролей",
+                        color=0xFF0000
+                    )
+                    embed.add_field(name="Текущий баланс", value=f"{new_balance} монет")
+                    await log_channel.send(embed=embed)
+        
+        if removed_roles:
+            cost = self.bot.config["costs"]["role_remove"] * len(removed_roles)
+            success, new_balance = await self.bot.spend_money(
+                after.guild,
+                cost,
+                f"Снятие {len(removed_roles)} роли(ей) с пользователя {after.display_name}"
+            )
+            
+            if not success:
+                log_channel = self.bot.get_channel(self.bot.chart_channel_id)
+                if log_channel:
+                    embed = discord.Embed(
+                        title="⚠️ Недостаточно средств",
+                        description=f"Не удалось списать {cost} монет за снятие ролей",
+                        color=0xFF0000
+                    )
+                    embed.add_field(name="Текущий баланс", value=f"{new_balance} монет")
+                    await log_channel.send(embed=embed)
+    
+    @commands.Cog.listener()
+    async def on_message_delete(self, message):
+        """Обработка удаления сообщения"""
+        if message.author.bot:
+            return
+        
+        cost = self.bot.config["costs"]["message_delete"]
+        success, new_balance = await self.bot.spend_money(
+            message.guild,
+            cost,
+            f"Удаление сообщения от {message.author.display_name}"
+        )
+        
+        if not success:
+            log_channel = self.bot.get_channel(self.bot.chart_channel_id)
+            if log_channel:
+                embed = discord.Embed(
+                    title="⚠️ Недостаточно средств",
+                    description=f"Не удалось списать {cost} монет за удаление сообщения",
+                    color=0xFF0000
+                )
+                embed.add_field(name="Текущий баланс", value=f"{new_balance} монет")
+                await log_channel.send(embed=embed)
+    
+    @commands.Cog.listener()
+    async def on_bulk_message_delete(self, messages):
+        """Обработка массового удаления сообщений"""
+        if not messages:
+            return
+        
+        guild = messages[0].guild
+        cost = self.bot.config["costs"]["bulk_message_delete"]
+        success, new_balance = await self.bot.spend_money(
+            guild,
+            cost,
+            f"Массовое удаление {len(messages)} сообщений"
+        )
+        
+        if not success:
+            log_channel = self.bot.get_channel(self.bot.chart_channel_id)
+            if log_channel:
+                embed = discord.Embed(
+                    title="⚠️ Недостаточно средств",
+                    description=f"Не удалось списать {cost} монет за массовое удаление",
+                    color=0xFF0000
+                )
+                embed.add_field(name="Текущий баланс", value=f"{new_balance} монет")
+                await log_channel.send(embed=embed)
+    
+    @commands.Cog.listener()
+    async def on_guild_update(self, before, after):
+        """Обработка изменений сервера"""
+        cost = 0
+        description = ""
+        
+        if before.name != after.name:
+            cost += self.bot.config["costs"]["server_name_change"]
+            description += f"Изменение названия сервера ({before.name} → {after.name})"
+        
+        if before.icon != after.icon:
+            cost += self.bot.config["costs"]["server_icon_change"]
+            if description:
+                description += ", "
+            description += "Изменение иконки сервера"
+        
+        if cost > 0:
+            success, new_balance = await self.bot.spend_money(
+                after,
+                cost,
+                description
+            )
+            
+            if not success:
+                log_channel = self.bot.get_channel(self.bot.chart_channel_id)
+                if log_channel:
+                    embed = discord.Embed(
+                        title="⚠️ Недостаточно средств",
+                        description=f"Не удалось списать {cost} монет за изменения сервера",
+                        color=0xFF0000
+                    )
+                    embed.add_field(name="Текущий баланс", value=f"{new_balance} монет")
+                    await log_channel.send(embed=embed)
+    
+    @commands.Cog.listener()
+    async def on_webhooks_update(self, channel):
+        """Обработка создания вебхуков"""
+        cost = self.bot.config["costs"]["webhook_create"]
+        success, new_balance = await self.bot.spend_money(
+            channel.guild,
+            cost,
+            f"Создание вебхука в канале {channel.name}"
+        )
+        
+        if not success:
+            log_channel = self.bot.get_channel(self.bot.chart_channel_id)
+            if log_channel:
+                embed = discord.Embed(
+                    title="⚠️ Недостаточно средств",
+                    description=f"Не удалось списать {cost} монет за создание вебхука",
+                    color=0xFF0000
+                )
+                embed.add_field(name="Текущий баланс", value=f"{new_balance} монет")
+                await log_channel.send(embed=embed)
 
     @commands.slash_command(name="модификаторы", description="Показать активные экономические модификаторы")
     async def modifiers(self, ctx):
