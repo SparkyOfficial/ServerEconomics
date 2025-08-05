@@ -1,7 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import sqlite3
+import aiosqlite
 import random
 from datetime import datetime, timedelta
 import asyncio
@@ -85,7 +85,7 @@ class Events(commands.Cog):
         
         # Если не принудительно, проверяем, есть ли активное событие
         if not force:
-            async with sqlite3.connect(self.bot.db_path) as conn:
+            async with aiosqlite.connect(self.bot.db_path) as conn:
                 cursor = await conn.execute(
                     "SELECT id FROM events WHERE guild_id = ? AND status = 'active' AND (expires_at > datetime('now') OR expires_at IS NULL)",
                     (interaction.guild.id,)
@@ -154,7 +154,7 @@ class Events(commands.Cog):
             options.append({"text": option3, "effect": effect3, "desc": ""})
 
         # Создание события в базе данных
-        async with sqlite3.connect(self.bot.db_path) as conn:
+        async with aiosqlite.connect(self.bot.db_path) as conn:
             cursor = await conn.execute(
                 """
                 INSERT INTO events (guild_id, title, description, status, created_at, expires_at)

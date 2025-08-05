@@ -1,7 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import sqlite3
+import aiosqlite
 from datetime import datetime, timedelta
 import asyncio
 
@@ -29,7 +29,7 @@ class Economy(commands.Cog):
         )
         
         # Последние транзакции
-        async with sqlite3.connect(self.bot.db_path) as conn:
+        async with aiosqlite.connect(self.bot.db_path) as conn:
             cursor = await conn.execute(
                 """SELECT amount, description, timestamp 
                    FROM transactions 
@@ -60,7 +60,7 @@ class Economy(commands.Cog):
     async def economy_status(self, interaction: discord.Interaction):
         """Команда для показа статуса экономики"""
         # Получение данных за последние 10 минут
-        async with sqlite3.connect(self.bot.db_path) as conn:
+        async with aiosqlite.connect(self.bot.db_path) as conn:
             cursor = await conn.execute(
                 """SELECT treasury, timestamp 
                    FROM economy 

@@ -1,7 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
-import sqlite3
+import aiosqlite
 from datetime import datetime, timedelta
 import asyncio
 import random
@@ -24,7 +24,7 @@ class EconomicInfluence(commands.Cog):
     async def cleanup_expired_events(self):
         """Очистка истекших событий"""
         try:
-            async with sqlite3.connect(self.bot.db_path) as conn:
+            async with aiosqlite.connect(self.bot.db_path) as conn:
                 now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 
                 # Проверяем существование колонки is_active

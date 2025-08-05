@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.patches import Rectangle
-import sqlite3
+import aiosqlite
 from datetime import datetime, timedelta
 import io
 import numpy as np

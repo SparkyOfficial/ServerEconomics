@@ -1,7 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import sqlite3
+import aiosqlite
 from datetime import datetime, timedelta
 import random
 import asyncio
@@ -19,7 +19,7 @@ class Personal(commands.Cog):
         balance = await self.bot.get_user_balance(interaction.guild, target_user)
         
         # Получить статистику
-        async with sqlite3.connect(self.bot.db_path) as conn:
+        async with aiosqlite.connect(self.bot.db_path) as conn:
             cursor = await conn.execute(
                 "SELECT total_earned FROM wallets WHERE guild_id = ? AND user_id = ?",
                 (interaction.guild.id, target_user.id)
@@ -75,7 +75,7 @@ class Personal(commands.Cog):
     @app_commands.command(name="работа", description="Поработать и заработать деньги")
     async def work(self, interaction: discord.Interaction):
         """Команда для работы"""
-        async with sqlite3.connect(self.bot.db_path) as conn:
+        async with aiosqlite.connect(self.bot.db_path) as conn:
             cursor = await conn.execute(
                 "SELECT last_work FROM wallets WHERE guild_id = ? AND user_id = ?",
                 (interaction.guild.id, interaction.user.id)
@@ -150,7 +150,7 @@ class Personal(commands.Cog):
     @app_commands.command(name="ежедневно", description="Получить ежедневную награду")
     async def daily(self, interaction: discord.Interaction):
         """Команда для ежедневной награды"""
-        async with sqlite3.connect(self.bot.db_path) as conn:
+        async with aiosqlite.connect(self.bot.db_path) as conn:
             cursor = await conn.execute(
                 "SELECT last_daily FROM wallets WHERE guild_id = ? AND user_id = ?",
                 (interaction.guild.id, interaction.user.id)
@@ -290,7 +290,7 @@ class Personal(commands.Cog):
     @app_commands.command(name="лидеры", description="Показать топ самых богатых пользователей")
     async def leaderboard(self, interaction: discord.Interaction):
         """Команда для показа таблицы лидеров"""
-        async with sqlite3.connect(self.bot.db_path) as conn:
+        async with aiosqlite.connect(self.bot.db_path) as conn:
             cursor = await conn.execute(
                 """SELECT user_id, balance, total_earned 
                    FROM wallets 

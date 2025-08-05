@@ -1,12 +1,13 @@
-import discord
-from discord.ext import commands, tasks
 import asyncio
-import aiosqlite as sqlite3
 import json
 import logging
-from datetime import datetime, timedelta
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
+
+import discord
+from discord.ext import commands, tasks
+import aiosqlite
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -104,7 +105,7 @@ class EconomyBot(commands.Bot):
         Создает все необходимые таблицы, если они не существуют,
         и выполняет миграцию данных при необходимости.
         """
-        async with sqlite3.connect(self.db_path) as conn:
+        async with aiosqlite.connect(self.db_path) as conn:
             # Включаем поддержку внешних ключей
             await conn.execute('PRAGMA foreign_keys = ON')
             
@@ -196,7 +197,7 @@ class EconomyBot(commands.Bot):
             for table_sql in tables:
                 try:
                     await conn.execute(table_sql)
-                except sqlite3.Error as e:
+                except aiosqlite.Error as e:
                     print(f"Ошибка при создании таблицы: {e}")
             
             # Создаем индексы для ускорения запросов
@@ -213,7 +214,7 @@ class EconomyBot(commands.Bot):
             for index_sql in indexes:
                 try:
                     await conn.execute(index_sql)
-                except sqlite3.Error as e:
+                except aiosqlite.Error as e:
                     print(f"Ошибка при создании индекса: {e}")
             
             # Проверяем, нужно ли мигрировать данные из старой схемы
@@ -246,7 +247,7 @@ class EconomyBot(commands.Bot):
                         # Переименовываем старую таблицу, чтобы не мигрировать повторно
                         await conn.execute("ALTER TABLE transactions RENAME TO transactions_old")
                         print("Успешно мигрированы данные из старой таблицы транзакций")
-            except sqlite3.Error as e:
+            except aiosqlite.Error as e:
                 print(f"Ошибка при миграции данных: {e}")
             
             await conn.commit()
@@ -342,7 +343,7 @@ class EconomyBot(commands.Bot):
     
     async def update_treasury(self, guild):
         """Обновление казны сервера с учетом модификаторов экономики"""
-        async with sqlite3.connect(self.db_path) as conn:
+        async with aiosqlite.connect(self.db_path) as conn:
             # Получение текущей казны
             cursor = await conn.execute(
                 "SELECT treasury FROM economy WHERE guild_id = ? ORDER BY timestamp DESC LIMIT 1",
@@ -439,7 +440,7 @@ class EconomyBot(commands.Bot):
             )
         
         # Очистка истекших модификаторов
-        async with sqlite3.connect(self.db_path) as conn:
+        async with aiosqlite.connect(self.db_path) as conn:
             await conn.execute(
                 """
                 DELETE FROM economic_modifiers 
@@ -472,7 +473,7 @@ class EconomyBot(commands.Bot):
             
         # Применяем модификаторы, если нужно
         if apply_modifiers:
-            async with sqlite3.connect(self.db_path) as conn:
+            async with aiosqlite.connect(self.db_path) as conn:
                 cursor = await conn.execute("""
                     SELECT SUM(value) FROM economic_modifiers 
                     WHERE guild_id = ? AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
@@ -497,7 +498,7 @@ class EconomyBot(commands.Bot):
         # Вычитаем сумму из казны
         new_balance = current_balance - amount
         
-        async with sqlite3.connect(self.db_path) as conn:
+        async with aiosqlite.connect(self.db_path) as conn:
             # Обновляем баланс казны
             await conn.execute("""
                 INSERT INTO economy (guild_id, treasury, timestamp)
@@ -539,7 +540,7 @@ class EconomyBot(commands.Bot):
         # Добавляем сумму к казне
         new_balance = current_balance + amount
         
-        async with sqlite3.connect(self.db_path) as conn:
+        async with aiosqlite.connect(self.db_path) as conn:
             # Обновляем баланс казны
             await conn.execute("""
                 INSERT INTO economy (guild_id, treasury, timestamp)
@@ -567,7 +568,7 @@ class EconomyBot(commands.Bot):
         Returns:
             int: Текущий баланс казны
         """
-        async with sqlite3.connect(self.db_path) as conn:
+        async with aiosqlite.connect(self.db_path) as conn:
             cursor = await conn.execute(
                 """
                 SELECT treasury 
@@ -609,7 +610,7 @@ class EconomyBot(commands.Bot):
         Returns:
             int: Текущий баланс пользователя
         """
-        async with sqlite3.connect(self.db_path) as conn:
+        async with aiosqlite.connect(self.db_path) as conn:
             cursor = await conn.execute(
                 """
                 SELECT balance 
@@ -635,7 +636,7 @@ class EconomyBot(commands.Bot):
         """
         initial_balance = self.config.get("personal_economy", {}).get("starting_balance", 100)
         
-        async with sqlite3.connect(self.db_path) as conn:
+        async with aiosqlite.connect(self.db_path) as conn:
             # Проверяем, не существует ли уже кошелек
             cursor = await conn.execute(
                 """
@@ -694,7 +695,7 @@ class EconomyBot(commands.Bot):
         tax_amount = int(amount * tax_rate) if transaction_type in ["work", "daily"] else 0
         net_amount = amount - tax_amount
         
-        async with sqlite3.connect(self.db_path) as conn:
+        async with aiosqlite.connect(self.db_path) as conn:
             # Проверяем существование кошелька
             cursor = await conn.execute(
                 "SELECT balance FROM wallets WHERE user_id = ? AND guild_id = ?",
@@ -786,7 +787,7 @@ class EconomyBot(commands.Bot):
         # Списываем деньги
         new_balance = current_balance - amount
         
-        async with sqlite3.connect(self.db_path) as conn:
+        async with aiosqlite.connect(self.db_path) as conn:
             # Обновляем баланс пользователя
             await conn.execute(
                 """
@@ -844,7 +845,7 @@ class EconomyBot(commands.Bot):
         fee_amount = int(amount * transfer_fee)
         net_amount = amount - fee_amount
         
-        async with sqlite3.connect(self.db_path) as conn:
+        async with aiosqlite.connect(self.db_path) as conn:
             try:
                 # Начинаем транзакцию
                 await conn.execute("BEGIN")
@@ -925,7 +926,7 @@ class EconomyBot(commands.Bot):
                 
                 return True, from_new_balance
                 
-            except sqlite3.Error as e:
+            except aiosqlite.Error as e:
                 await conn.rollback()
                 error_msg = f"Ошибка при переводе денег: {e}"
                 print(error_msg)
