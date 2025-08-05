@@ -28,7 +28,7 @@ async def create_economy_chart(bot, guild_id=None):
     """Создание графика экономики"""
     try:
         # Получение данных за последние 12 часов
-        async with sqlite3.connect(bot.db_path) as conn:
+        async with aiosqlite.connect(bot.db_path) as conn:
             twelve_hours_ago = datetime.now() - timedelta(hours=12)
             
             if guild_id:

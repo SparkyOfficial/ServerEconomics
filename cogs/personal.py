@@ -20,8 +20,11 @@ class Personal(commands.Cog):
         
         # Получить статистику
         async with aiosqlite.connect(self.bot.db_path) as conn:
+            # Вычисляем total_earned из транзакций
             cursor = await conn.execute(
-                "SELECT total_earned FROM wallets WHERE guild_id = ? AND user_id = ?",
+                """SELECT COALESCE(SUM(amount), 0) as total_earned 
+                   FROM transactions 
+                   WHERE guild_id = ? AND to_user_id = ? AND amount > 0""",
                 (interaction.guild.id, target_user.id)
             )
             result = await cursor.fetchone()
@@ -292,10 +295,12 @@ class Personal(commands.Cog):
         """Команда для показа таблицы лидеров"""
         async with aiosqlite.connect(self.bot.db_path) as conn:
             cursor = await conn.execute(
-                """SELECT user_id, balance, total_earned 
-                   FROM wallets 
-                   WHERE guild_id = ? 
-                   ORDER BY balance DESC 
+                """SELECT w.user_id, w.balance, COALESCE(SUM(t.amount), 0) as total_earned 
+                   FROM wallets w
+                   LEFT JOIN transactions t ON w.guild_id = t.guild_id AND w.user_id = t.to_user_id AND t.amount > 0
+                   WHERE w.guild_id = ? 
+                   GROUP BY w.user_id, w.balance
+                   ORDER BY w.balance DESC 
                    LIMIT 10""",
                 (interaction.guild.id,)
             )

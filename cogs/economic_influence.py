@@ -99,7 +99,7 @@ class EconomicInfluence(commands.Cog):
     
     async def get_active_modifiers(self, guild_id: int) -> List[Dict]:
         """Получить активные модификаторы экономики"""
-        async with sqlite3.connect(self.bot.db_path) as conn:
+        async with aiosqlite.connect(self.bot.db_path) as conn:
             cursor = await conn.execute(
                 """
                 SELECT modifier_type, value, description, expires_at 
@@ -137,7 +137,7 @@ class EconomicInfluence(commands.Cog):
             if duration_hours:
                 expires_at = (datetime.now() + timedelta(hours=duration_hours)).strftime('%Y-%m-%d %H:%M:%S')
             
-            async with sqlite3.connect(self.bot.db_path) as conn:
+            async with aiosqlite.connect(self.bot.db_path) as conn:
                 # Удаляем существующий модификатор такого же типа
                 await conn.execute(
                     "DELETE FROM economic_modifiers WHERE guild_id = ? AND modifier_type = ?",
@@ -176,7 +176,7 @@ class EconomicInfluence(commands.Cog):
             if duration_hours:
                 expires_at = (datetime.now() + timedelta(hours=duration_hours)).strftime('%Y-%m-%d %H:%M:%S')
             
-            async with sqlite3.connect(self.bot.db_path) as conn:
+            async with aiosqlite.connect(self.bot.db_path) as conn:
                 await conn.execute(
                     """
                     INSERT INTO economic_events 

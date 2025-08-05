@@ -496,7 +496,7 @@ class Economy(commands.Cog):
     @app_commands.command(name="модификаторы", description="Показать активные экономические модификаторы")
     async def modifiers(self, interaction: discord.Interaction):
         """Команда для показа активных модификаторов"""
-        conn = sqlite3.connect(self.bot.db_path)
+        conn = aiosqlite.connect(self.bot.db_path)
         cursor = conn.cursor()
         
         cursor.execute(

@@ -207,20 +207,19 @@ class Events(commands.Cog):
         event_data = random.choice(self.event_types)
         
         # Создание события в базе данных
-        conn = sqlite3.connect(self.bot.db_path)
-        cursor = conn.cursor()
-        
-        # Создаем событие с временем истечения (30 минут по умолчанию)
-        duration = 30  # minutes
-        cursor.execute(
-            """
-            INSERT INTO events (guild_id, title, description, status, created_at, expires_at)
-            VALUES (?, ?, ?, 'active', datetime('now'), datetime('now', ? || ' minutes'))
-            """,
-            (guild.id, event_data['name'], event_data['description'], duration)
-        )
-        
-        event_id = cursor.lastrowid
+        async with aiosqlite.connect(self.bot.db_path) as conn:
+            # Создаем событие с временем истечения (30 минут по умолчанию)
+            duration = 30  # minutes
+            cursor = await conn.execute(
+                """
+                INSERT INTO events (guild_id, title, description, status, created_at, expires_at)
+                VALUES (?, ?, ?, 'active', datetime('now'), datetime('now', ? || ' minutes'))
+                """,
+                (guild.id, event_data['name'], event_data['description'], duration)
+            )
+            
+            event_id = cursor.lastrowid
+            await cursor.close()
         
         # Создаем view с кнопками для голосования
         view = EventView(self.bot, event_id, event_data['options'])

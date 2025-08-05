@@ -425,7 +425,7 @@ class EconomyBot(commands.Bot):
             
             # Сохранение в базу
             await conn.execute(
-                "INSERT INTO economy (guild_id, treasury) VALUES (?, ?)",
+                "INSERT OR REPLACE INTO economy (guild_id, treasury) VALUES (?, ?)",
                 (guild.id, new_treasury)
             )
         
@@ -501,7 +501,7 @@ class EconomyBot(commands.Bot):
         async with aiosqlite.connect(self.db_path) as conn:
             # Обновляем баланс казны
             await conn.execute("""
-                INSERT INTO economy (guild_id, treasury, timestamp)
+                INSERT OR REPLACE INTO economy (guild_id, treasury, timestamp)
                 VALUES (?, ?, datetime('now'))
             """, (guild.id, new_balance))
             
@@ -543,7 +543,7 @@ class EconomyBot(commands.Bot):
         async with aiosqlite.connect(self.db_path) as conn:
             # Обновляем баланс казны
             await conn.execute("""
-                INSERT INTO economy (guild_id, treasury, timestamp)
+                INSERT OR REPLACE INTO economy (guild_id, treasury, timestamp)
                 VALUES (?, ?, datetime('now'))
             """, (guild.id, new_balance))
             
@@ -590,7 +590,7 @@ class EconomyBot(commands.Bot):
                 
                 await conn.execute(
                     """
-                    INSERT INTO economy (guild_id, treasury, timestamp)
+                    INSERT OR IGNORE INTO economy (guild_id, treasury, timestamp)
                     VALUES (?, ?, datetime('now'))
                     """, 
                     (guild.id, initial_balance)

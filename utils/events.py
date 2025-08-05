@@ -1,4 +1,4 @@
-import sqlite3
+import aiosqlite
 import random
 from datetime import datetime, timedelta
 import asyncio
@@ -6,17 +6,15 @@ import asyncio
 async def check_and_trigger_event(bot, guild):
     """Проверка и запуск случайных событий"""
     try:
-        conn = sqlite3.connect(bot.db_path)
-        cursor = conn.cursor()
-        
-        # Проверка последнего события
-        cursor.execute(
-            "SELECT timestamp FROM events WHERE guild_id = ? ORDER BY timestamp DESC LIMIT 1",
-            (guild.id,)
-        )
-        
-        last_event = cursor.fetchone()
-        conn.close()
+        async with aiosqlite.connect(bot.db_path) as conn:
+            # Проверка последнего события
+            cursor = await conn.execute(
+                "SELECT timestamp FROM events WHERE guild_id = ? ORDER BY timestamp DESC LIMIT 1",
+                (guild.id,)
+            )
+            
+            last_event = await cursor.fetchone()
+            await cursor.close()
         
         if last_event:
             last_event_time = datetime.fromisoformat(last_event[0])
@@ -71,24 +69,22 @@ def get_economic_status(treasury, growth):
     else:
         return "💎 Экономический бум", 0xFFD700
 
-def calculate_growth(bot, guild_id, minutes=10):
+async def calculate_growth(bot, guild_id, minutes=10):
     """Расчет роста экономики за указанный период"""
     try:
-        conn = sqlite3.connect(bot.db_path)
-        cursor = conn.cursor()
-        
-        time_ago = datetime.now() - timedelta(minutes=minutes)
-        
-        cursor.execute(
-            """SELECT treasury, timestamp 
-               FROM economy 
-               WHERE guild_id = ? AND timestamp >= ? 
-               ORDER BY timestamp""",
-            (guild_id, time_ago)
-        )
-        
-        data = cursor.fetchall()
-        conn.close()
+        async with aiosqlite.connect(bot.db_path) as conn:
+            time_ago = datetime.now() - timedelta(minutes=minutes)
+            
+            cursor = await conn.execute(
+                """SELECT treasury, timestamp 
+                   FROM economy 
+                   WHERE guild_id = ? AND timestamp >= ? 
+                   ORDER BY timestamp""",
+                (guild_id, time_ago)
+            )
+            
+            data = await cursor.fetchall()
+            await cursor.close()
         
         if len(data) < 2:
             return 0
