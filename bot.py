@@ -1,143 +1,198 @@
+"""
+Main bot class and initialization
+"""
 
-import os, asyncio, discord, math
+import discord
 from discord.ext import commands, tasks
-from economy import Economy
-from events import EventEngine
+import os
+import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import random
 
+from database import DatabaseManager
+from economic_engine import EconomicEngine
+from utils.constants import (
+    BOT_COLOR, ECONOMIC_STATUS, TRADE_POLICIES,
+    ADMIN_ACTIONS_COSTS, EVENT_INTERVALS
+)
+
+# Set up logging
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-TOKEN = os.environ.get("DISCORD_TOKEN")  # or paste token here for testing
-
-intents = discord.Intents.default()
-intents.message_content = True
-intents.guilds = True
-intents.members = True
-
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
-
-eco = Economy()
-event_engine = EventEngine(eco, bot=bot)
-
-# Background tick: updates every minute (in production tune to desired frequency)
-@tasks.loop(seconds=60.0)
-async def periodic_tick():
-    res = await eco.tick()
-    logging.info(f"Tick: treasury={res['treasury']:.2f}, tax={res['tax_collected']:.2f}")
-
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    await event_engine.start()
-    periodic_tick.start()
-
-# Basic commands
-
-@bot.command()
-async def help(ctx):
-    em = discord.Embed(title="Economy Bot Commands", color=0x00ff00)
-    em.add_field(name="!treasury", value="Show treasury amount and status")
-    em.add_field(name="!balance [@user]", value="Show your or user's balance")
-    em.add_field(name="!donate <amount>", value="Donate from your balance to the treasury")
-    em.add_field(name="!setpolicy <policy>", value="Admins: set trade policy")
-    em.add_field(name="!adminact <cost> <description>", value="Admins: perform action that costs treasury")
-    em.add_field(name="!status", value="Show economy & trade statuses")
-    await ctx.send(embed=em)
-
-@bot.command()
-async def treasury(ctx):
-    st = eco.state
-    tre = st["treasury"]
-    status = eco.get_status()
-    trade = st.get("trade_policy")
-    em = discord.Embed(title="Treasury", color=0xFFD700)
-    em.add_field(name="Amount", value=f"{tre:,.2f}")
-    em.add_field(name="Status", value=status)
-    em.add_field(name="Trade policy", value=trade)
-    # attach graph if exists
-    graph = os.path.join(os.path.dirname(__file__), "treasury_graph.png")
-    if os.path.exists(graph):
-        await ctx.send(file=discord.File(graph), embed=em)
-    else:
-        await ctx.send(embed=em)
-
-@bot.command()
-async def balance(ctx, member: discord.Member=None):
-    target = member or ctx.author
-    p = eco.get_player(target.id)
-    await ctx.send(f"{target.display_name} balance: {p.get('balance',0):,.2f} (passive rate {p.get('passive_rate',0):.2f}/hour)")
-
-@bot.command()
-async def donate(ctx, amount: float):
-    uid = str(ctx.author.id)
-    p = eco.get_player(ctx.author.id)
-    if p.get("balance",0) >= amount and amount>0:
-        ok = await eco.player_influence(ctx.author.id, amount)
-        if ok:
-            await ctx.send(f"Thank you! Donated {amount:,.2f} to treasury.")
+class EconomicBot(commands.Bot):
+    """Main Discord bot class for economic simulation."""
+    
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        intents.guilds = True
+        intents.members = True
+        
+        super().__init__(
+            command_prefix='!',
+            intents=intents,
+            help_command=None,
+            description="Economic Simulation Bot inspired by TNO and Millennium Dawn"
+        )
+        
+        self.db = DatabaseManager()
+        self.economic_engine = EconomicEngine(self.db)
+        self.start_time = datetime.now()
+        
+    async def setup_hook(self):
+        """Called when the bot is starting up."""
+        # Initialize database
+        await self.db.initialize()
+        
+        # Load cogs
+        cogs = [
+            'cogs.treasury',
+            'cogs.administration', 
+            'cogs.economy',
+            'cogs.events',
+            'cogs.trade'
+        ]
+        
+        for cog in cogs:
+            try:
+                await self.load_extension(cog)
+                logger.info(f"Loaded cog: {cog}")
+            except Exception as e:
+                logger.error(f"Failed to load cog {cog}: {e}")
+        
+        # Start background tasks
+        self.treasury_updater.start()
+        self.passive_income_generator.start()
+        self.random_event_scheduler.start()
+        
+        logger.info("Bot setup completed")
+    
+    async def on_ready(self):
+        """Called when the bot is ready."""
+        print(f'\n{self.user} is online!')
+        print(f'Bot ID: {self.user.id if self.user else "Unknown"}')
+        print(f'Guilds: {len(self.guilds)}')
+        print(f'Started at: {self.start_time}')
+        
+        try:
+            synced = await self.tree.sync()
+            print(f'Synced {len(synced)} slash commands')
+        except Exception as e:
+            print(f'Failed to sync commands: {e}')
+        
+        # Set bot status
+        await self.change_presence(
+            activity=discord.Activity(
+                type=discord.ActivityType.watching,
+                name="the global economy"
+            )
+        )
+    
+    async def on_guild_join(self, guild):
+        """Called when bot joins a new guild."""
+        logger.info(f"Joined new guild: {guild.name} (ID: {guild.id})")
+        await self.db.initialize_guild(guild.id)
+    
+    async def on_command_error(self, ctx, error):
+        """Global error handler for prefix commands."""
+        if isinstance(error, commands.CommandNotFound):
+            return  # Ignore unknown commands
+        elif isinstance(error, commands.MissingPermissions):
+            await ctx.send("❌ You don't have permission to use this command.")
+        elif isinstance(error, commands.BotMissingPermissions):
+            await ctx.send("❌ I don't have the necessary permissions to execute this command.")
+        elif isinstance(error, commands.CommandOnCooldown):
+            await ctx.send(f"⏰ Command on cooldown. Try again in {error.retry_after:.1f} seconds.")
         else:
-            await ctx.send("Donation failed.")
-    else:
-        await ctx.send("Insufficient personal funds.")
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def setpolicy(ctx, *, policy: str):
-    policy = policy.strip()
-    ok = eco.set_trade_policy(policy)
-    if ok:
-        await ctx.send(f"Trade policy set to {policy}.")
-    else:
-        await ctx.send(f"Unknown policy. Choose from: {', '.join(['Autarky','Protectionism','Balanced','Free Trade'])}")
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def adminact(ctx, cost: float, *, description: str):
-    cost = abs(float(cost))
-    ok = await eco.admin_action(cost, description, admin_id=str(ctx.author.id))
-    if ok:
-        await ctx.send(f"Admin action succeeded. Cost {cost:,.2f} taken from treasury.")
-    else:
-        await ctx.send(f"Not enough funds in treasury. Action cancelled.")
-
-@bot.command()
-async def status(ctx):
-    st = eco.state
-    await ctx.send(f"Economy status: {eco.get_status()}\nTrade policy: {st.get('trade_policy')}")
-
-# Utilities: allow admins to give players starting money and passive rates
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def grant(ctx, member: discord.Member, amount: float, passive_rate: float=0.0):
-    eco.add_player(member.id, initial_balance=amount, passive_rate=passive_rate)
-    await ctx.send(f"Granted {amount:,.2f} and passive rate {passive_rate:.2f}/h to {member.display_name}")
-
-# Simple command to list recent events
-@bot.command()
-async def events(ctx):
-    evs = eco.state.get("events", [])[-10:]
-    if not evs:
-        await ctx.send("No recent events.")
-        return
-    lines = []
-    for e in evs[::-1]:
-        t = e.get("time","?")
-        typ = e.get("type","")
-        desc = e.get("desc", str(e))
-        lines.append(f"{t} — {typ} — {desc}")
-    await ctx.send("Recent events:\n" + "\n".join(lines))
-
-# Error handler
-@bot.event
-async def on_command_error(ctx, error):
-    if hasattr(error, "original"):
-        error = error.original
-    await ctx.send(f"Error: {str(error)}")
-
-if __name__ == "__main__":
-    if not TOKEN:
-        print("Error: Set DISCORD_TOKEN environment variable.")
-    else:
-        bot.run(TOKEN)
+            logger.error(f"Unhandled command error: {error}")
+            await ctx.send("❌ An unexpected error occurred.")
+    
+    @tasks.loop(seconds=30)
+    async def treasury_updater(self):
+        """Update treasury values in real-time."""
+        try:
+            for guild in self.guilds:
+                await self.economic_engine.update_real_time_treasury(guild.id)
+        except Exception as e:
+            logger.error(f"Treasury updater error: {e}")
+    
+    @tasks.loop(minutes=5)
+    async def passive_income_generator(self):
+        """Generate passive income from server participants."""
+        try:
+            for guild in self.guilds:
+                member_count = len([m for m in guild.members if not m.bot])
+                if member_count > 0:
+                    # Base income per member
+                    base_income = 10
+                    total_income = member_count * base_income
+                    
+                    # Apply economic modifiers
+                    economic_data = await self.db.get_guild_economy(guild.id)
+                    multiplier = self.economic_engine.get_income_multiplier(
+                        economic_data['economic_status']
+                    )
+                    
+                    final_income = int(total_income * multiplier)
+                    await self.db.update_treasury(guild.id, final_income)
+                    
+                    logger.info(f"Generated {final_income} passive income for guild {guild.id}")
+        except Exception as e:
+            logger.error(f"Passive income generator error: {e}")
+    
+    @tasks.loop(hours=1)
+    async def random_event_scheduler(self):
+        """Schedule random economic events."""
+        try:
+            for guild in self.guilds:
+                # Check if it's time for an event
+                last_event = await self.db.get_last_event_time(guild.id)
+                now = datetime.now()
+                
+                if last_event is None:
+                    # First event
+                    next_event_hours = random.randint(1, 24)
+                    await self.db.set_next_event_time(
+                        guild.id, 
+                        now + timedelta(hours=next_event_hours)
+                    )
+                    continue
+                
+                next_event_time = await self.db.get_next_event_time(guild.id)
+                if next_event_time and now >= next_event_time:
+                    # Trigger event
+                    events_cog = self.get_cog('Events')
+                    if events_cog and hasattr(events_cog, 'trigger_random_event'):
+                        await events_cog.trigger_random_event(guild.id)
+                    
+                    # Schedule next event
+                    next_event_hours = random.randint(1, 24)
+                    await self.db.set_next_event_time(
+                        guild.id,
+                        now + timedelta(hours=next_event_hours)
+                    )
+        except Exception as e:
+            logger.error(f"Random event scheduler error: {e}")
+    
+    @treasury_updater.before_loop
+    @passive_income_generator.before_loop
+    @random_event_scheduler.before_loop
+    async def before_tasks(self):
+        """Wait for bot to be ready before starting tasks."""
+        await self.wait_until_ready()
+    
+    async def close(self):
+        """Clean shutdown."""
+        logger.info("Shutting down bot...")
+        
+        # Cancel tasks
+        self.treasury_updater.cancel()
+        self.passive_income_generator.cancel()
+        self.random_event_scheduler.cancel()
+        
+        # Close database connections
+        await self.db.close()
+        
+        await super().close()
