@@ -1,0 +1,13 @@
+{
+  "treasury": 100000.0,
+  "history": [
+    [
+      "2025-08-10T11:42:15.706441",
+      100000.0
+    ]
+  ],
+  "players": {},
+  "trade_policy": "Balanced",
+  "last_tick": 1754826135.706452,
+  "events": []
+}
